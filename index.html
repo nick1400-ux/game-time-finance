@@ -981,6 +981,12 @@ const STORE_KEY = 'gametime_trades';
 // (e.g. a downloaded copy shared with a friend) — local to that device only.
 const CLOUD_AVAILABLE = (typeof window !== 'undefined' && window.storage && typeof window.storage.get === 'function');
 
+function getSecretLinkKey(){
+  return new URLSearchParams(window.location.search).get('key');
+}
+const REMOTE_KEY = getSecretLinkKey();
+const REMOTE_ENABLED = !!REMOTE_KEY;
+
 async function storageGet(key){
   if (CLOUD_AVAILABLE){
     try{
@@ -1009,7 +1015,10 @@ async function storageDelete(key){
 function renderStorageBadge(){
   const el = document.getElementById('storageBadge');
   if (!el) return;
-  if (CLOUD_AVAILABLE){
+  if (REMOTE_ENABLED){
+    el.textContent = '● Trades, tasks & expenses synced to your database — everything else (check-ins, debts, goals, notes, habits) saved locally to this browser only';
+    el.classList.add('synced');
+  } else if (CLOUD_AVAILABLE){
     el.textContent = '● Synced to your Claude account — same data on phone & other devices';
     el.classList.add('synced');
   } else {
@@ -1835,12 +1844,6 @@ function renderDebts(){
 // it's enforced by the database itself.
 const SUPABASE_URL = 'https://qskardmqxdxjojntplqa.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_B6Weh1zVWSwstai7YO6DfA_RWajLBzr';
-
-function getSecretLinkKey(){
-  return new URLSearchParams(window.location.search).get('key');
-}
-const REMOTE_KEY = getSecretLinkKey();
-const REMOTE_ENABLED = !!REMOTE_KEY;
 
 function supaHeaders(extra){
   return Object.assign({
