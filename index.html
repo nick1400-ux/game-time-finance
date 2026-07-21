@@ -211,7 +211,7 @@
   }
   .cal-nav:hover{ border-color:var(--amber-dim); color:var(--amber); }
   .cal-title{ font-size:12px; letter-spacing:1.5px; text-transform:uppercase; color:var(--text); font-family:'IBM Plex Mono',monospace; }
-  .calendar-grid{ display:grid; grid-template-columns: repeat(7, 1fr); gap:4px; }
+  .calendar-grid{ display:grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap:4px; }
   .cal-dow{ font-size:9.5px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-faint); text-align:center; padding-bottom:4px; }
   .cal-day{
     aspect-ratio:1; border-radius:2px; border:1px solid var(--border-soft); background:var(--bg-raised);
