@@ -1156,6 +1156,23 @@ document.getElementById('f_date').addEventListener('change', updateTodayCount);
 
 // ---- storage ----
 async function loadTrades(){
+  if (REMOTE_ENABLED){
+    try{
+      const rows = await supaSelect('trades', 'select=*&order=date.desc');
+      trades = rows.map(row => ({
+        id: row.id, symbol: row.symbol, date: row.date, direction: row.direction,
+        setup: row.setup, size: row.size === null ? null : Number(row.size),
+        entry: Number(row.entry), stop: Number(row.stop),
+        target: row.target === null ? null : Number(row.target),
+        exit: Number(row.exit), r: Number(row.r),
+        followed: row.followed, habits: row.habits || [], notes: row.notes || ''
+      }));
+      render();
+      return;
+    } catch(e){
+      console.error('Supabase load failed, falling back to local storage', e);
+    }
+  }
   try{
     const raw = await storageGet(STORE_KEY);
     trades = raw ? JSON.parse(raw) : [];
@@ -1207,8 +1224,12 @@ document.getElementById('tradeForm').addEventListener('submit', async (e) => {
     notes: document.getElementById('f_notes').value.trim()
   };
 
+  if (REMOTE_ENABLED){
+    try{ await supaInsert('trades', trade); }
+    catch(err){ console.error('Supabase insert failed', err); alert('Could not save that trade to the database.'); return; }
+  }
   trades.unshift(trade);
-  await saveTrades();
+  if (!REMOTE_ENABLED) await saveTrades();
   render();
   e.target.reset();
   document.getElementById('f_date').value = todayStr();
@@ -1223,8 +1244,12 @@ document.getElementById('tradeForm').addEventListener('submit', async (e) => {
 });
 
 async function deleteTrade(id){
+  if (REMOTE_ENABLED){
+    try{ await supaDelete('trades', id); }
+    catch(err){ console.error('Supabase delete failed', err); alert('Could not delete that trade from the database.'); return; }
+  }
   trades = trades.filter(t => t.id !== id);
-  await saveTrades();
+  if (!REMOTE_ENABLED) await saveTrades();
   render();
 }
 
@@ -1814,32 +1839,58 @@ const SUPABASE_ANON_KEY = 'sb_publishable_B6Weh1zVWSwstai7YO6DfA_RWajLBzr';
 function getSecretLinkKey(){
   return new URLSearchParams(window.location.search).get('key');
 }
+const REMOTE_KEY = getSecretLinkKey();
+const REMOTE_ENABLED = !!REMOTE_KEY;
 
-async function loadExpensesFromSupabase(secretKey){
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/expenses?select=*&order=date.desc`, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      'x-app-secret': secretKey
-    }
+function supaHeaders(extra){
+  return Object.assign({
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    'x-app-secret': REMOTE_KEY,
+    'Content-Type': 'application/json'
+  }, extra || {});
+}
+async function supaSelect(table, query){
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query || 'select=*'}`, { headers: supaHeaders() });
+  if (!res.ok) throw new Error(`${table} select failed: ${res.status}`);
+  return res.json();
+}
+async function supaInsert(table, row){
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: supaHeaders({ Prefer: 'return=representation' }),
+    body: JSON.stringify(row)
   });
-  if (!res.ok) throw new Error('Supabase fetch failed: ' + res.status);
-  const rows = await res.json();
-  return rows.map(r => ({
-    id: r.id,
-    date: r.date,
-    category: r.category,
-    amount: Number(r.amount),
-    note: r.note || '',
-    source: r.source
-  }));
+  if (!res.ok) throw new Error(`${table} insert failed: ${res.status}`);
+  const data = await res.json();
+  return data[0];
+}
+async function supaUpdate(table, id, patch){
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: supaHeaders({ Prefer: 'return=representation' }),
+    body: JSON.stringify(patch)
+  });
+  if (!res.ok) throw new Error(`${table} update failed: ${res.status}`);
+  const data = await res.json();
+  return data[0];
+}
+async function supaDelete(table, id){
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: supaHeaders()
+  });
+  if (!res.ok) throw new Error(`${table} delete failed: ${res.status}`);
 }
 
 async function loadExpenses(){
-  const secretKey = getSecretLinkKey();
-  if (secretKey){
+  if (REMOTE_ENABLED){
     try{
-      expenses = await loadExpensesFromSupabase(secretKey);
+      const rows = await supaSelect('expenses', 'select=*&order=date.desc');
+      expenses = rows.map(row => ({
+        id: row.id, date: row.date, category: row.category,
+        amount: Number(row.amount), note: row.note || '', source: row.source
+      }));
       renderExpenses();
       renderExpenseBreakdown();
       return;
@@ -1866,11 +1917,25 @@ document.getElementById('expenseForm').addEventListener('submit', async (e) => {
   const note = document.getElementById('e_note').value.trim();
   if (!date || isNaN(amount)) return;
 
-  expenses.unshift({
-    id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
-    date, category, amount, note
-  });
-  await saveExpenses();
+  if (REMOTE_ENABLED){
+    try{
+      const inserted = await supaInsert('expenses', { date, category, amount, note: note || null, source: 'manual' });
+      expenses.unshift({
+        id: inserted.id, date: inserted.date, category: inserted.category,
+        amount: Number(inserted.amount), note: inserted.note || '', source: inserted.source
+      });
+    } catch(err){
+      console.error('Supabase insert failed', err);
+      alert('Could not save that to the database. Check your connection and try again.');
+      return;
+    }
+  } else {
+    expenses.unshift({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
+      date, category, amount, note
+    });
+    await saveExpenses();
+  }
   renderExpenses();
   renderExpenseBreakdown();
   renderFinanceStats();
@@ -1879,8 +1944,12 @@ document.getElementById('expenseForm').addEventListener('submit', async (e) => {
 });
 
 async function deleteExpense(id){
+  if (REMOTE_ENABLED){
+    try{ await supaDelete('expenses', id); }
+    catch(err){ console.error('Supabase delete failed', err); alert('Could not delete that from the database.'); return; }
+  }
   expenses = expenses.filter(x => x.id !== id);
-  await saveExpenses();
+  if (!REMOTE_ENABLED) await saveExpenses();
   renderExpenses();
   renderExpenseBreakdown();
   renderFinanceStats();
@@ -1993,6 +2062,19 @@ let tasks = [];
 const TASKS_KEY = 'gametime_tasks';
 
 async function loadTasks(){
+  if (REMOTE_ENABLED){
+    try{
+      const rows = await supaSelect('tasks', 'select=*&order=created_at.desc');
+      tasks = rows.map(row => ({
+        id: row.id, text: row.text, due: row.due, priority: row.priority,
+        category: row.category, done: row.done, completedAt: row.completed_at
+      }));
+      renderTasks();
+      return;
+    } catch(e){
+      console.error('Supabase load failed, falling back to local storage', e);
+    }
+  }
   try{
     const raw = await storageGet(TASKS_KEY);
     tasks = raw ? JSON.parse(raw) : [];
@@ -2010,11 +2092,24 @@ document.getElementById('taskForm').addEventListener('submit', async (e) => {
   const priority = document.getElementById('tk_priority').value;
   const category = document.getElementById('tk_category').value;
   if (!text) return;
-  tasks.unshift({
+  const task = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2,6),
     text, due: due || null, priority, category, done: false, completedAt: null
-  });
-  await saveTasks();
+  };
+  if (REMOTE_ENABLED){
+    try{
+      await supaInsert('tasks', {
+        id: task.id, text: task.text, due: task.due, priority: task.priority,
+        category: task.category, done: task.done, completed_at: task.completedAt
+      });
+    } catch(err){
+      console.error('Supabase insert failed', err);
+      alert('Could not save that task to the database.');
+      return;
+    }
+  }
+  tasks.unshift(task);
+  if (!REMOTE_ENABLED) await saveTasks();
   renderTasks();
   e.target.reset();
   document.getElementById('tk_priority').value = 'med';
@@ -2023,15 +2118,25 @@ document.getElementById('taskForm').addEventListener('submit', async (e) => {
 async function toggleTask(id){
   const t = tasks.find(x => x.id === id);
   if (!t) return;
-  t.done = !t.done;
-  t.completedAt = t.done ? todayStr() : null;
-  await saveTasks();
+  const newDone = !t.done;
+  const newCompletedAt = newDone ? todayStr() : null;
+  if (REMOTE_ENABLED){
+    try{ await supaUpdate('tasks', id, { done: newDone, completed_at: newCompletedAt }); }
+    catch(err){ console.error('Supabase update failed', err); alert('Could not update that task in the database.'); return; }
+  }
+  t.done = newDone;
+  t.completedAt = newCompletedAt;
+  if (!REMOTE_ENABLED) await saveTasks();
   renderTasks();
 }
 
 async function deleteTask(id){
+  if (REMOTE_ENABLED){
+    try{ await supaDelete('tasks', id); }
+    catch(err){ console.error('Supabase delete failed', err); alert('Could not delete that task from the database.'); return; }
+  }
   tasks = tasks.filter(x => x.id !== id);
-  await saveTasks();
+  if (!REMOTE_ENABLED) await saveTasks();
   renderTasks();
 }
 
